@@ -1,0 +1,94 @@
+%%cuda
+#include <iostream>
+#include <vector>
+#include <cuda_runtime.h>
+#include <chrono>
+#include <algorithm>
+
+using namespace std;
+using namespace chrono;
+
+const int N = 33554432; // 2^25
+
+// Собственная функция swap для GPU
+__device__ void device_swap(int& a, int& b) {
+    int temp = a;
+    a = b;
+    b = temp;
+}
+
+__global__ void bitonicSortStep(int* arr, int j, int k, int n) {
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    int ixj = i ^ j;
+    
+    if (ixj > i && ixj < n) {
+        if ((i & k) == 0) {
+            if (arr[i] > arr[ixj]) {
+                device_swap(arr[i], arr[ixj]);
+            }
+        } else {
+            if (arr[i] < arr[ixj]) {
+                device_swap(arr[i], arr[ixj]);
+            }
+        }
+    }
+}
+
+int main() {
+    cout << "=== BITONIC SORT - CUDA VERSION ===" << endl;
+    cout << "Array size: " << N << " elements" << endl;
+    cout << "Threads per block: 64" << endl;
+    cout << "Blocks per grid: " << (N + 255) / 256 << endl;
+    cout << endl;
+    
+    // ===== 1. ЗАПОЛНЕНИЕ МАССИВА НА CPU =====
+    vector<int> h_arr(N);
+    
+    srand(time(nullptr));
+    for (int i = 0; i < N; ++i) {
+        h_arr[i] = rand() % 1000000;
+    }
+    
+    // ===== 3. ВЫДЕЛЕНИЕ ПАМЯТИ НА GPU =====
+    int* d_arr;
+    cudaMalloc(&d_arr, N * sizeof(int));
+    cudaMemcpy(d_arr, h_arr.data(), N * sizeof(int), cudaMemcpyHostToDevice);
+    
+    int threadsPerBlock = 64;
+    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+    
+    // ===== 4. ЗАПУСК БИТОНИЧЕСКОЙ СОРТИРОВКИ =====
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    
+    cudaEventRecord(start);
+    
+    for (int step_k = 2; step_k <= N; step_k <<= 1) {
+        for (int step_j = step_k >> 1; step_j > 0; step_j >>= 1) {
+            bitonicSortStep<<<blocksPerGrid, threadsPerBlock>>>(d_arr, step_j, step_k, N);
+            cudaDeviceSynchronize();
+        }
+    }
+    
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    
+    // ===== 5. КОПИРОВАНИЕ РЕЗУЛЬТАТА НА CPU =====
+    cudaMemcpy(h_arr.data(), d_arr, N * sizeof(int), cudaMemcpyDeviceToHost);
+    
+    // ===== 6. ПРОВЕРКА КОРРЕКТНОСТИ =====
+    bool is_sorted_correctly = is_sorted(h_arr.begin(), h_arr.end());
+    
+    cout << "=== RESULTS ===" << endl;
+    cout << "Sorted correctly: " << (is_sorted_correctly ? "YES" : "NO") << endl;
+    cout << "CUDA time: " << milliseconds / 1000.0 << " seconds" << endl;
+    
+    // ===== 7. ОЧИСТКА ПАМЯТИ =====
+    cudaFree(d_arr);
+    
+    return 0;
+}
