@@ -1,0 +1,117 @@
+%%cuda
+#include <iostream>
+#include <cuda_runtime.h>
+#include <curand_kernel.h>
+#include <chrono>
+
+using namespace std;
+using namespace chrono;
+
+const int BLOCK_SIZE = 64;
+const long long N = 100000000;
+
+// Функции для GPU
+__device__ bool inRegion(double x, double y) {
+    return (y >= 0.0) && (y <= x) && (y <= (4.0 - x));
+}
+
+__device__ double f(double x, double y) {
+    return 2.0 * x + 3.0 * y;
+}
+
+// Собственная реализация atomicAdd для double (для старых архитектур)
+__device__ double atomicAddDouble(double* address, double val) {
+    unsigned long long int* address_as_ull = (unsigned long long int*)address;
+    unsigned long long int old = *address_as_ull;
+    unsigned long long int assumed;
+    do {
+        assumed = old;
+        old = atomicCAS(address_as_ull, assumed,
+                        __double_as_longlong(__longlong_as_double(assumed) + val));
+    } while (assumed != old);
+    return __longlong_as_double(old);
+}
+
+__global__ void monteCarloKernel(double* d_sum, unsigned long long* d_count, long long n, unsigned long long seed) {
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int totalThreads = gridDim.x * blockDim.x;
+    
+    curandState state;
+    curand_init(seed + idx, idx, 0, &state);
+    
+    double local_sum = 0.0;
+    unsigned long long local_count = 0;
+    
+    for (long long i = idx; i < n; i += totalThreads) {
+        double x = curand_uniform_double(&state) * 4.0;
+        double y = curand_uniform_double(&state) * 4.0;
+        
+        if (inRegion(x, y)) {
+            local_sum += f(x, y);
+            local_count++;
+        }
+    }
+    
+    atomicAddDouble(d_sum, local_sum);
+    atomicAdd(d_count, local_count);
+}
+
+int main() {
+    cout << "=== MONTE CARLO INTEGRAL - CUDA PARALLEL VERSION ===" << endl;
+    cout << "Variant 10: f(x,y) = 2x + 3y" << endl;
+    cout << "Region: y = x, y = 4 - x, y = 0" << endl;
+    cout << "Number of trials: " << N << endl;
+    cout << "Block size: " << BLOCK_SIZE << endl;
+    cout << "Blocks per grid: 1024" << endl;
+    cout << "Total threads: " << 1024 * BLOCK_SIZE << endl;
+    cout << endl;
+    
+    // ===== ВЫДЕЛЕНИЕ ПАМЯТИ НА GPU =====
+    double *d_sum;
+    unsigned long long *d_count;
+    
+    cudaMalloc(&d_sum, sizeof(double));
+    cudaMalloc(&d_count, sizeof(unsigned long long));
+    cudaMemset(d_sum, 0, sizeof(double));
+    cudaMemset(d_count, 0, sizeof(unsigned long long));
+    
+    int threadsPerBlock = BLOCK_SIZE;
+    int blocksPerGrid = 1024;
+    
+    // ===== ЗАПУСК ПАРАЛЛЕЛЬНОЙ ВЕРСИИ =====
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    
+    cudaEventRecord(start);
+    
+    monteCarloKernel<<<blocksPerGrid, threadsPerBlock>>>(d_sum, d_count, N, time(nullptr));
+    cudaDeviceSynchronize();
+    
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    
+    // ===== ПОЛУЧЕНИЕ РЕЗУЛЬТАТОВ =====
+    double h_sum;
+    unsigned long long h_count;
+    cudaMemcpy(&h_sum, d_sum, sizeof(double), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&h_count, d_count, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+    
+    double rectArea = 16.0;
+    double integral = rectArea * h_sum / N;
+    
+    // ===== ВЫВОД РЕЗУЛЬТАТОВ =====
+    cout << "=== RESULTS ===" << endl;
+    cout << "Estimated integral: " << integral << endl;
+    cout << "Points inside region: " << h_count << " (" << (100.0 * h_count / N) << "%)" << endl;
+    cout << "Time: " << milliseconds / 1000.0 << " seconds" << endl;
+    
+    // ===== ОЧИСТКА ПАМЯТИ =====
+    cudaFree(d_sum);
+    cudaFree(d_count);
+    
+    return 0;
+}
