@@ -1,0 +1,52 @@
+%%cuda
+#include <iostream>
+#include <chrono>
+#include <cstdlib>
+#include <ctime>
+#include <cmath>
+
+using namespace std;
+using namespace chrono;
+
+// Функция: попадает ли точка в область
+bool inRegion(double x, double y) {
+    return (y >= 0) && (y <= x) && (y <= 4 - x);
+}
+
+// Подынтегральная функция
+double f(double x, double y) {
+    return 2.0 * x + 3.0 * y;
+}
+
+int main() {
+    const long long N = 100000000; // 100 млн испытаний
+    double rectArea = 4.0 * 4.0; // площадь ограничивающего прямоугольника [0,4]x[0,4]
+    
+    srand(time(nullptr));
+    
+    auto start = high_resolution_clock::now();
+    
+    double sum = 0.0;
+    long long count = 0;
+    
+    for (long long i = 0; i < N; ++i) {
+        double x = static_cast<double>(rand()) / RAND_MAX * 4.0;
+        double y = static_cast<double>(rand()) / RAND_MAX * 4.0;
+        
+        if (inRegion(x, y)) {
+            sum += f(x, y);
+            count++;
+        }
+    }
+    
+    double integral = rectArea * sum / N;
+    
+    auto end = high_resolution_clock::now();
+    duration<double> elapsed = end - start;
+    
+    cout << "Estimated integral: " << integral << endl;
+    cout << "Points inside region: " << count << " (" << (100.0 * count / N) << "%)" << endl;
+    cout << "Time: " << elapsed.count() << " seconds" << endl;
+    
+    return 0;
+}
